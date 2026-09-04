@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# magctl - Magisk control wrapper. Runs from the laptop (over ADB) OR from
+# Termux itself. Safe to run NOW (before unlock): all read-only commands work,
+# and mutating commands correctly report that root/Magisk is not yet available.
+#
+#   magctl status          - probe Magisk + root + boot state (read-only, safe)
+#   magctl modules         - list any installed Magisk modules
+#   magctl gotoshell       - open a root shell via Magisk (REQUIRES active Magisk)
+#
+# For a LOCKED bootloader, status explains actions are deferred (per playbook).
+#
+# NOTE: `adb pm ...` is a native adb subcommand, while `adb shell <cmd>` runs a
+# remote command. Keep them separate - do not wrap both through one helper.
+
+# requires a live adb device (robust: any "<serial><TAB>device" line)
+dev_up() { adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{found=1} END{exit !found}'; }
+if ! dev_up; then
+  echo "magctl: no adb device attached - run ./adbw first" >&2
+  exit 1
+fi
+
+ashell() {
+  if [ -n "${ADB_TARGET:-}" ]; then
+    command adb -s "$ADB_TARGET" shell "$@"
+  else
+    command adb shell "$@"
+  fi
+}
+
+case "${1:-status}" in
+  status)
+    echo "== device =="
+    ashell getprop ro.boot.model 2>/dev/null | sed 's/^/model: /'
+    ashell getprop ro.boot.product 2>/dev/null | sed 's/^/product: /'
+    ashell getprop ro.boot.verifiedbootstate 2>/dev/null | sed 's/^/verified boot: /'
+    echo "== magisk present? =="
+    PM_OUT="$(ashell pm list packages 2>/dev/null || true)"
+    if echo "$PM_OUT" | grep -q com.topjohnwu.magisk; then
+      echo "com.topjohnwu.magisk  (installed)"
+    else
+      echo "not detected (or not reachable)"
+    fi
+    echo "== root via su? =="
+    if ashell 'su -c id' 2>/dev/null | grep -q 'uid=0'; then
+      echo "ROOT available"
+    else
+      echo "no (bootloader locked / no su)  ->  root + Magisk actions deferred per playbook"
+    fi
+    ;;
+  modules)
+    if [ -n "${ADB_TARGET:-}" ]; then
+      command adb -s "$ADB_TARGET" shell 'ls -la /data/adb/modules 2>/dev/null' 2>/dev/null || echo "no modules dir (not rooted yet)"
+    else
+      command adb shell 'ls -la /data/adb/modules 2>/dev/null' 2>/dev/null || echo "no modules dir (not rooted yet)"
+    fi
+    ;;
+  gotoshell)
+    if ashell 'su -c id' 2>/dev/null | grep -q 'uid=0'; then
+      ashell 'su -c "sh -l"'
+    else
+      echo "Root is not available (locked bootloader). 'gotoshell' is a post-unlock action - see playbook.md" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "usage: $0 {status|modules|gotoshell}" >&2; exit 1;;
+esac

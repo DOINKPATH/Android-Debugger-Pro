@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# kali-boot - start your Kali environment in Termux on boot (rootless).
+# Runs: tmux session 'kali' -> proot-distro login kali -> tmux + sshd
+# Works WITHOUT root (proot), so safe on a locked bootloader.
+# Install as a boot hook (Termux:Boot / termux-wake-lock):
+#   cp kali-boot.sh ~/.termux/boot/kali-boot.sh && chmod +x ~/.termux/boot/kali-boot.sh
+set -euo pipefail
+
+LOG=~/.termux/boot/kali-boot.log
+mkdir -p ~/.termux/boot
+{
+  echo "== kali-boot at $(date) =="
+  # sshd so the laptop can reach in
+  command -v sshd >/dev/null && { pgrep -x sshd >/dev/null || sshd; }
+
+  # Open tmux + Kali proot
+  command -v tmux >/dev/null && command -v proot-distro >/dev/null && {
+    tmux new-session -d -s kali 'proot-distro login kali' 2>/dev/null || \
+    tmux new-session -d -s kali 2>/dev/null
+  }
+  echo "kali-boot done $(date)"
+} >> "$LOG" 2>&1

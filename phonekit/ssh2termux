@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ssh2termux - ssh into Termux on the phone over the adbr reverse tunnel.
+# Usage: ssh2termux        (key auth, user 'termux')
+#        ssh2termux <user>
+set -euo pipefail
+
+USER="${1:-termux}"
+LOCAL="${ADB_LOCAL_PORT:-5022}"
+
+if ! adb devices | awk 'NR>1 && $2=="device"{f=1} END{exit !f}'; then
+  echo "No ADB device. Run: ./adbw" >&2; exit 1
+fi
+
+# Make sure the tunnel is up (spawn if not).
+if ! ssh -o BatchMode=yes -o ConnectTimeout=3 -p "$LOCAL" "${USER}@127.0.0.1" true 2>/dev/null; then
+  ( adbr "$LOCAL" 8022 >/dev/null 2>&1 & )
+  sleep 2
+  for _ in $(seq 1 12); do
+    if ssh -o BatchMode=yes -o ConnectTimeout=2 -p "$LOCAL" "${USER}@127.0.0.1" true 2>/dev/null; then break; fi
+    sleep 2
+  done
+fi
+
+exec ssh -o ControlMaster=no -p "$LOCAL" "${USER}@127.0.0.1"
