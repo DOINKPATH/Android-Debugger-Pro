@@ -1,0 +1,112 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# phonesrv - Mobile server lifecycle manager (run INSIDE Termux on the phone).
+#
+#   phonesrv live    [LIVE]     wake-lock + sshd + tmux Kali + report (stay live)
+#   phonesrv dark    [DARK]     kill all listeners, release wake-lock, optional
+#                               airplane-mode (needs WRITE_SECURE_SETTINGS grant
+#                               via ./grant-perms on the laptop)
+#   phonesrv off     [OFF]      graceful stop then power-off (see notes)
+#   phonesrv watch   [RESILIENT] watchdog: keeps services alive through
+#                               connection loss; auto-restarts sshd, keeps
+#                               wake-lock, heartbeats to a log
+#   phonesrv status             listeners, battery, tmux, versions
+#
+# No KDE. Rootless-friendly. AIRPLANE=1 makes `dark` also cut the radios.
+set -uo pipefail
+
+TMUX_SESSION="${TMUX_SESSION:-kali}"
+LOG_DIR="$HOME/.phonesrv"; mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/phonesrv.log"
+log(){ printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
+listeners(){ ss -tln 2>/dev/null | tail -n +2; }
+battery(){ termux-battery-status 2>/dev/null | jq -r '"battery: \(.percentage)% (\(.status))"' 2>/dev/null || echo 'battery: n/a (install Termux:API app)'; }
+
+have_settings_perm(){ settings get global airplane_mode_on >/dev/null 2>&1; }
+
+cmd_live(){
+  log 'MODE: LIVE - staying up'
+  termux-wake-lock 2>/dev/null || true
+  pgrep -x sshd >/dev/null || sshd
+  command -v tmux >/dev/null && { tmux has-session -t "$TMUX_SESSION" 2>/dev/null || tmux new-session -d -s "$TMUX_SESSION"; }
+  echo "== LIVE: listening sockets =="; listeners
+  battery
+  log 'LIVE up.'
+}
+
+cmd_dark(){
+  log 'MODE: DARK - going quiet'
+  pkill -x sshd 2>/dev/null || true
+  termux-wake-unlock 2>/dev/null || true
+  if [ "${AIRPLANE:-0}" = 1 ]; then
+    if have_settings_perm; then
+      settings put global airplane_mode_on 1
+      am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1
+      log 'DARK: radios cut (airplane ON). Restore with: phonesrv live && phonesrv airplane-off'
+    else
+      log 'DARK: no WRITE_SECURE_SETTINGS - grant via laptop: ./grant-perms'
+    fi
+  else
+    log 'DARK: listeners killed, radios untouched (set AIRPLANE=1 to cut radios)'
+  fi
+  echo "== DARK: remaining listeners (should be empty) =="; listeners || true
+}
+
+cmd_off(){
+  log 'MODE: OFF - graceful shutdown'
+  pkill -x sshd 2>/dev/null || true
+  termux-wake-unlock 2>/dev/null || true
+  sync
+  log 'Attempting power-off...'
+  if ! reboot -p 2>/dev/null; then
+    echo 'Power-off needs elevated shell. From the laptop run:  adb shell reboot -p'
+    exit 1
+  fi
+}
+
+airplane_off(){
+  if have_settings_perm; then
+    settings put global airplane_mode_on 0
+    am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1
+    log 'airplane OFF - radios back'
+  else
+    echo 'no WRITE_SECURE_SETTINGS - grant via laptop: ./grant-perms' >&2; exit 1
+  fi
+}
+
+cmd_watch(){
+  log 'MODE: RESILIENT (watch) - surviving connection loss. Ctrl-C to stop.'
+  termux-wake-lock 2>/dev/null || true
+  trap 'termux-wake-unlock 2>/dev/null; log "watch stopped (wake-lock released)"; exit 0' INT TERM
+  while :; do
+    pgrep -x sshd >/dev/null || { log 'watch: sshd died - restarting'; sshd; }
+    command -v tmux >/dev/null && { tmux has-session -t "$TMUX_SESSION" 2>/dev/null || tmux new-session -d -s "$TMUX_SESSION"; }
+    log "watch: heartbeat ok (sshd up, tmux '$TMUX_SESSION' up)"
+    sleep "${WATCH_INTERVAL:-30}"
+  done
+}
+
+cmd_status(){
+  echo "== uptime =="; uptime
+  echo "== listeners =="; listeners
+  echo "== tmux =="; tmux ls 2>/dev/null || echo '(no sessions)'
+  battery
+  echo "== toolchain =="
+  clang --version 2>/dev/null | head -1
+  python3 --version 2>/dev/null
+  node --version 2>/dev/null | sed 's/^/node /'
+  go version 2>/dev/null
+  rustc --version 2>/dev/null
+  java -version 2>&1 | head -1
+  echo "== radios =="
+  if have_settings_perm; then echo "airplane_mode: $(settings get global airplane_mode_on)"; else echo 'settings perm: not granted (laptop: ./grant-perms)'; fi
+}
+
+case "${1:-status}" in
+  live) cmd_live;;
+  dark) cmd_dark;;
+  off)  cmd_off;;
+  watch) cmd_watch;;
+  status) cmd_status;;
+  airplane-off) airplane_off;;
+  *) echo "usage: $0 {live|dark|off|watch|status|airplane-off}"; exit 1;;
+esac

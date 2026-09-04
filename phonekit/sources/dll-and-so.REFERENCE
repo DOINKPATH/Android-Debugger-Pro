@@ -1,0 +1,8 @@
+# DLLs vs .so - reality on Android/Termux:
+# * Native shared libraries on Linux/Android are ELF .so files, linked via the
+#   dynamic loader (Termux: $PREFIX/lib). Build them with clang -shared.
+# * Windows PE .dll files cannot load on ARM64 Android directly. Options:
+#     - Box64/Box86 + Wine (experimental, heavy, not in Termux main repo)
+#     - Cross-compile Windows binaries with mingw-w64 FROM the laptop
+#     - Rewire Windows-only deps to POSIX/.so equivalents
+# * The NDK gives Android .so + executables for aarch64/armv7/x86_64 (NDK=1 flag).

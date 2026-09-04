@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# srvwatch - laptop-side resilience watchdog for the phone link.
+# Withstands connection loss: auto-reconnects ADB (USB/TCP), re-establishes the
+# adb-reverse tunnel, and keeps retrying with backoff. Run and forget:
+#
+#   ./srvwatch              # loop forever
+#   ./srvwatch --once       # single check-and-repair pass (cron-friendly)
+#   PHONE_IP=192.168.1.50 ./srvwatch
+set -uo pipefail
+
+ADB_PORT="${ADB_PORT:-5555}"
+PHONE_IP="${PHONE_IP:-}"
+PHONE_BT_ADDR="${PHONE_BT_ADDR:-BC:94:24:32:E8:43}"
+LOCAL="${1:-}"; [ "$LOCAL" = "--once" ] && ONCE=1 || ONCE="${ONCE:-0}"
+LOG="$HOME/.phonesrv"; mkdir -p "$LOG"; LOG="$LOG/srvwatch.log"
+log(){ printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
+
+dev_up(){ adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{f=1} END{exit !f}'; }
+
+repair(){
+  # 1) USB already there?
+  if dev_up; then log 'link: usb device up'; return 0; fi
+  # 2) known TCP target
+  if [ -n "$PHONE_IP" ] && adb connect "$PHONE_IP:$ADB_PORT" 2>&1 | grep -qi connected && dev_up; then
+    log "link: tcp $PHONE_IP:$ADB_PORT reconnected"; return 0
+  fi
+  # 3) bluetooth bridge
+  if command -v bluetoothctl >/dev/null; then
+    bluetoothctl connect "$PHONE_BT_ADDR" >/dev/null 2>&1 || true
+    sleep 2
+    bt_ip="$(ip -o -4 addr show bnep0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+    if [ -n "${bt_ip:-}" ] && adb connect "$bt_ip:$ADB_PORT" 2>&1 | grep -qi connected && dev_up; then
+      log "link: bluetooth $bt_ip reconnected"; return 0
+    fi
+  fi
+  # 4) wake the phone screen/termux so adbd serves again (harmless if absent)
+  adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  return 1
+}
+
+tunnel(){ # keep the adb-reverse bridge to Termux sshd
+  adb reverse --list 2>/dev/null | grep -q "tcp:5022" || adb reverse tcp:5022 tcp:8022 >/dev/null 2>&1
+}
+
+interval="${SRVWATCH_INTERVAL:-15}"; backoff=1
+log "srvwatch started (interval ${interval}s, phone_ip=${PHONE_IP:-auto})"
+while :; do
+  if repair; then
+    backoff=1; tunnel
+    log 'watch: link OK, tunnel ensured'
+  else
+    log "watch: link DOWN - retry in $((interval * backoff))s"
+    sleep $((interval * backoff))
+    backoff=$(( backoff < 8 ? backoff * 2 : 8 ))
+    continue
+  fi
+  [ "$ONCE" = 1 ] && exit 0
+  sleep "$interval"
+done

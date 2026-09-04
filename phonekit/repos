@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# repos - source.list manager for the phone stack (no KDE, no root needed).
+#   repos show            - current sources (Termux + proot distros)
+#   repos termux          - ensure Termux main+x11+root+science+game+unstable
+#   repos kali            - set GNU/Kali source.list inside the kali proot chroot
+#   repos debian          - install Debian proot + configure Debian GNU repos
+#   repos verify          - apt policy sanity (Termux side)
+set -uo pipefail
+
+show_termux(){
+  echo "== Termux main =="
+  cat "$PREFIX/etc/apt/sources.list" 2>/dev/null || echo '(none)'
+  echo "== Termux sources.list.d =="
+  ls "$PREFIX/etc/apt/sources.list.d/" 2>/dev/null || echo '(none)'
+}
+cmd_termux(){
+  pkg install -y x11-repo root-repo science-repo game-repo unstable-repo 2>/dev/null || true
+  show_termux
+}
+cmd_kali(){
+  command -v proot-distro >/dev/null || pkg install -y proot-distro
+  proot-distro login kali -- bash -c '
+    printf "%s\n" "deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list
+    apt-get update -qq && echo "kali-rolling repos OK"' 2>/dev/null || echo 'kali proot not installed yet - run setup-termux.sh first'
+}
+cmd_debian(){
+  command -v proot-distro >/dev/null || pkg install -y proot-distro
+  proot-distro install debian 2>/dev/null || true
+  proot-distro login debian -- bash -c '
+    printf "%s\n" "deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware" \
+                 "deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware" \
+                 "deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware" > /etc/apt/sources.list
+    apt-get update -qq && echo "debian GNU repos OK"' 2>/dev/null || echo 'debian install deferred'
+}
+cmd_verify(){ apt policy 2>/dev/null | head -30; }
+
+case "${1:-show}" in
+  show) show_termux;;
+  termux) cmd_termux;;
+  kali) cmd_kali;;
+  debian) cmd_debian;;
+  verify) cmd_verify;;
+  *) echo "usage: $0 {show|termux|kali|debian|verify}"; exit 1;;
+esac

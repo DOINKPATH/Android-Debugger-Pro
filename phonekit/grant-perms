@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# grant-perms - grant Termux the Android secure-settings permission from the
+# laptop over ADB. Required for phone-side radio control (airplane mode) used
+# by `phonesrv dark` / `phonesrv airplane-off`. Reversible (pm revoke).
+set -euo pipefail
+
+if ! adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{f=1} END{exit !f}'; then
+  echo "no adb device attached - run ./adbw first" >&2; exit 1
+fi
+
+echo ">> granting android.permission.WRITE_SECURE_SETTINGS to com.termux"
+adb shell pm grant com.termux android.permission.WRITE_SECURE_SETTINGS
+
+echo ">> verify (should print a number, not an error):"
+adb shell settings get global airplane_mode_on
+
+echo ">> done. Termux can now toggle radios:  phonesrv dark AIRPLANE=1 / phonesrv airplane-off"

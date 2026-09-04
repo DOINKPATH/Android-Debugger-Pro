@@ -157,4 +157,52 @@ Kali on the Pi is separate ARM work (`rpi-imager`/`kali-arm`). The Pi isn't in t
 - [ ] `kali-boot` shows Kali up on boot
 - [ ] (deferred) unlock → Magisk → NetHunter
 - [ ] (deferred) kernel/OTA pipeline
+---
+
+## 11. Full dev stack on the phone `[LIVE]` — languages, SDKs, JDKs, toolchains
+
+`setup-termux.sh` provisions (flags: `NDK=1`, `JDK=21`, `ML=1`, `DEBIAN=1`, `SKIP_HEAVY=1`):
+
+| Layer | Packages |
+|---|---|
+| Compilers / build | clang, lld, mold, gcc-family via clang, make, cmake, ninja, binutils, pkg-config, autoconf/automake, bison/flex, gdb, strace |
+| Languages | Python (+pip, numpy), Node LTS, Ruby, PHP, Perl, Lua 5.4, Go, Rust |
+| JDK / JRE / OpenJDK | `openjdk-17` (default) or `openjdk-21` (`JDK=21`) — includes JRE via jre dir |
+| Android SDK/NDK | `android-tools` (adb/fastboot), `android-ndk` + `ndk-multilib` with `NDK=1` (aarch64/armv7/x86_64/i686 cross) |
+| Servers | openssh (sshd), nginx, sqlite, rsync, aria2 |
+| Crypto / encode / decode | openssl-tool, gnupg, age, jq, xxd, base64/coreutils, p7zip/zip/unzip, qrencode |
+| AI / Machine Learning | numpy always; `ML=1` adds scipy, pandas, matplotlib, torch/torchvision (aarch64 wheels; torch optional/long) |
+
+**Architecture matrix:** phone = aarch64 (MT6835). Termux repos serve aarch64/arm/x86_64/i686. NDK = cross toolchains for all four ABIs. Go/Rust cross-compile from laptop→phone targets (`GOARCH=arm64`, `--target aarch64-linux-android`).
+
+---
+
+## 12. Server lifecycle — `phonesrv` `[LIVE]` (rootless)
+
+Run inside Termux. Modes:
+
+- **`phonesrv live`** — stay live: `termux-wake-lock`, sshd, tmux `kali` session, prints listeners + battery. This is the "always-on mobile server" state (screen off OK).
+- **`phonesrv dark`** — go dark: kills sshd, releases wake-lock, verifies zero listeners. `AIRPLANE=1 ./phonesrv dark` also cuts Wi-Fi/cellular radios via `settings put global airplane_mode_on` — requires the one-time laptop grant: **`./grant-perms`** (`pm grant com.termux android.permission.WRITE_SECURE_SETTINGS`, reversible with `pm revoke`).
+- **`phonesrv off`** — graceful: stop services, `sync`, then power-off. If Termux can't (`reboot -p` needs elevated shell), run from laptop: `adb shell reboot -p`.
+- **`phonesrv watch`** — resilient watchdog: loop restarts sshd/tmux if they die, re-locks wake, heartbeats to `~/.phonesrv/phonesrv.log`. Designed to **withstand connection loss**: listeners keep serving locally and come straight back when the link returns.
+- **`phonesrv status`** — uptime, listeners, tmux, battery, toolchain versions, radio state.
+- **`phonesrv airplane-off`** — restores radios after DARK.
+
+**Laptop-side resilience — `srvwatch`** `[LIVE]`: loop that repairs the ADB link (USB → `PHONE_IP:5555` → Bluetooth bnep0), re-establishes the `adb reverse` tunnel, exponential backoff on loss (`SRVWATCH_INTERVAL=15`, `PHONE_IP=x.x.x.x ./srvwatch`, `--once` for cron). Pair `srvwatch` (laptop) + `phonesrv watch` (phone) = connection-loss-proof stack.
+
+**Boot persistence:** `kali-boot` in `~/.termux/boot/` (Termux:Boot add-on) auto-starts sshd + tmux Kali on phone boot.
+
+---
+
+## 13. Source lists — Linux / GNU / Termux (+ FreeBSD reality) `[LIVE]`
+
+- `./repos termux` — Termux `main + x11 + root + science + game + unstable` (`$PREFIX/etc/apt/sources.list.d/`)
+- `./repos kali` — inside the kali proot: `kali-rolling main contrib non-free non-free-firmware` (GNU/Kali)
+- `./repos debian` (`DEBIAN=1`) — Debian trixie GNU repos in a proot distro
+- `./repos show` / `./repos verify` — inspect current sources / apt policy
+- Reference files in `sources/`: `kali-rolling.list`, `debian-gnu.list`, `termux-main.sources`
+
+**FreeBSD:** cannot run natively on this Android device (kernel mismatch, locked bootloader). Realistic paths: FreeBSD VM on the laptop, or FreeBSD on a Pi/spare box reachable over the network from Termux. Reference config kept at `sources/freebsd-pkg.conf.REFERENCE`.
+
+**DLLs:** Windows PE `.dll` files don't load on aarch64 Android. Native shared objects are ELF `.so` (`clang -shared`, `$PREFIX/lib`). Windows-targeting builds → mingw-w64 cross-compile from the laptop; experimental Box64+Wine exists but is out of scope. See `sources/dll-and-so.REFERENCE`.
 - **Central principle:** one control surface (`magctl`), three entry points (laptop ADB, Termux SSH, phone GUI) — all converge on Magisk.
